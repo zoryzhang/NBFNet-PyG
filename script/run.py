@@ -20,7 +20,7 @@ separator = ">" * 30
 line = "-" * 30
 
 
-def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None):
+def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None, device=None):
     if cfg.train.num_epoch == 0:
         return
 
@@ -111,7 +111,7 @@ def train_and_validate(cfg, model, train_data, valid_data, filtered_data=None):
 
 
 @torch.no_grad()
-def test(cfg, model, test_data, filtered_data=None):
+def test(cfg, model, test_data, filtered_data=None, device=None):
     world_size = util.get_world_size()
     rank = util.get_rank()
 
@@ -142,14 +142,14 @@ def test(cfg, model, test_data, filtered_data=None):
 
     ranking = torch.cat(rankings)
     num_negative = torch.cat(num_negatives)
-    all_size = torch.zeros(world_size, dtype=torch.long, device=model.device)
+    all_size = torch.zeros(world_size, dtype=torch.long, device=device)
     all_size[rank] = len(ranking)
     if world_size > 1:
         dist.all_reduce(all_size, op=dist.ReduceOp.SUM)
     cum_size = all_size.cumsum(0)
-    all_ranking = torch.zeros(all_size.sum(), dtype=torch.long, device=model.device)
+    all_ranking = torch.zeros(all_size.sum(), dtype=torch.long, device=device)
     all_ranking[cum_size[rank] - all_size[rank]: cum_size[rank]] = ranking
-    all_num_negative = torch.zeros(all_size.sum(), dtype=torch.long, device=model.device)
+    all_num_negative = torch.zeros(all_size.sum(), dtype=torch.long, device=device)
     all_num_negative[cum_size[rank] - all_size[rank]: cum_size[rank]] = num_negative
     if world_size > 1:
         dist.all_reduce(all_ranking, op=dist.ReduceOp.SUM)
@@ -181,45 +181,3 @@ def test(cfg, model, test_data, filtered_data=None):
     mrr = (1 / all_ranking.float()).mean()
 
     return mrr
-
-
-if __name__ == "__main__":
-    args, vars = util.parse_args()
-    cfg = util.load_config(args.config, context=vars)
-    working_dir = util.create_working_directory(cfg)
-
-    torch.manual_seed(args.seed + util.get_rank())
-
-    logger = util.get_root_logger()
-    if util.get_rank() == 0:
-        logger.warning("Random seed: %d" % args.seed)
-        logger.warning("Config file: %s" % args.config)
-        logger.warning(pprint.pformat(cfg))
-    is_inductive = cfg.dataset["class"].startswith("Ind")
-    dataset = util.build_dataset(cfg)
-    cfg.model.num_relation = dataset.num_relations
-    model = util.build_model(cfg)
-
-    device = util.get_device(cfg)
-    model = model.to(device)
-    train_data, valid_data, test_data = dataset[0], dataset[1], dataset[2]
-    train_data = train_data.to(device)
-    valid_data = valid_data.to(device)
-    test_data = test_data.to(device)
-    if is_inductive:
-        # for inductive setting, use only the test fact graph for filtered ranking
-        filtered_data = None
-    else:
-        # for transductive setting, use the whole graph for filtered ranking
-        filtered_data = Data(edge_index=dataset.data.target_edge_index, edge_type=dataset.data.target_edge_type)
-        filtered_data = filtered_data.to(device)
-
-    train_and_validate(cfg, model, train_data, valid_data, filtered_data=filtered_data)
-    if util.get_rank() == 0:
-        logger.warning(separator)
-        logger.warning("Evaluate on valid")
-    test(cfg, model, valid_data, filtered_data=filtered_data)
-    if util.get_rank() == 0:
-        logger.warning(separator)
-        logger.warning("Evaluate on test")
-    test(cfg, model, test_data, filtered_data=filtered_data)
