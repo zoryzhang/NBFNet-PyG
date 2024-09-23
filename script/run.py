@@ -2,6 +2,7 @@ import os
 import sys
 import math
 import pprint
+from loguru import logger
 
 import torch
 from torch import optim
@@ -141,14 +142,14 @@ def test(cfg, model, test_data, filtered_data=None):
 
     ranking = torch.cat(rankings)
     num_negative = torch.cat(num_negatives)
-    all_size = torch.zeros(world_size, dtype=torch.long, device=device)
+    all_size = torch.zeros(world_size, dtype=torch.long, device=model.device)
     all_size[rank] = len(ranking)
     if world_size > 1:
         dist.all_reduce(all_size, op=dist.ReduceOp.SUM)
     cum_size = all_size.cumsum(0)
-    all_ranking = torch.zeros(all_size.sum(), dtype=torch.long, device=device)
+    all_ranking = torch.zeros(all_size.sum(), dtype=torch.long, device=model.device)
     all_ranking[cum_size[rank] - all_size[rank]: cum_size[rank]] = ranking
-    all_num_negative = torch.zeros(all_size.sum(), dtype=torch.long, device=device)
+    all_num_negative = torch.zeros(all_size.sum(), dtype=torch.long, device=model.device)
     all_num_negative[cum_size[rank] - all_size[rank]: cum_size[rank]] = num_negative
     if world_size > 1:
         dist.all_reduce(all_ranking, op=dist.ReduceOp.SUM)
